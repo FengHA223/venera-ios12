@@ -54,6 +54,17 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      - name: Lower zip_flutter podspec to iOS 12
+        # zip_flutter 0.0.12 declares s.platform = :ios '13.0', but its native
+        # code is pure C++ (miniz) with no iOS 13+ API. CocoaPods' dependency
+        # resolver rejects it before post_install can override the target, so
+        # the podspec in the pub cache must be patched after pub get.
+        run: |
+          ZIP_SPEC=$(find "$PUB_CACHE" -path "*zip_flutter*/ios/zip_flutter.podspec" | head -1)
+          echo "Patching: $ZIP_SPEC"
+          sed -i '' -E "s/s\.platform = :ios, '1[0-9]+\.[0-9]+'/s.platform = :ios, '12.0'/" "$ZIP_SPEC"
+          grep -n "s.platform" "$ZIP_SPEC"
+
       - name: Build iOS (release, no code signing)
         run: flutter build ios --release --no-codesign
 
