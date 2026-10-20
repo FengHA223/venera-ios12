@@ -1,0 +1,114 @@
+name: Build iOS 12 (unsigned IPA)
+run-name: Build iOS 12 (unsigned IPA)
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main, master]
+
+jobs:
+  Build_IOS12:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.32.6
+          architecture: x64
+
+      - name: Select Xcode 16.x (Xcode 26+ is not used; it raised the minimum iOS target)
+        run: |
+          ls -1 /Applications | grep -i Xcode
+          SELECTED=""
+          for v in 16.4 16.3 16.2 16.1 16.0; do
+            if [ -d "/Applications/Xcode_$v.app" ]; then
+              SELECTED="/Applications/Xcode_$v.app"
+              break
+            fi
+          done
+          if [ -z "$SELECTED" ]; then
+            echo "No Xcode 16.x found on this runner image. Check the list above and pin an available 16.x version."
+            exit 1
+          fi
+          echo "Using $SELECTED"
+          sudo xcode-select --switch "$SELECTED"
+          xcodebuild -version
+
+      - name: Prepare Rust toolchain
+        run: |
+          rustup update stable
+          rustup target add aarch64-apple-ios
+
+      - name: Force Rust (rhttp) deployment target to iOS 12
+        # cargokit sets RUSTFLAGS itself, so the deployment target must be
+        # passed as a target-specific rustflag, which Cargo merges with RUSTFLAGS.
+        run: |
+          mkdir -p "$HOME/.cargo"
+          cat >> "$HOME/.cargo/config.toml" <<'EOF'
+          [target.aarch64-apple-ios]
+          rustflags = ["-C", "deployment-target=12.0"]
+          EOF
+          cat "$HOME/.cargo/config.toml"
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build iOS (release, no code signing)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package IPA
+        run: |
+          mkdir -p build/ios/iphoneos/Payload
+          mv build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
+          cd build/ios/iphoneos
+          zip -r venera-ios.ipa Payload
+
+      - name: Verify iOS 12 compatibility (minos + chained fixups + weak links)
+        run: |
+          set +e
+          echo "===== Mach-O binaries ====="
+          find build/ios/iphoneos/Payload -type f | while read -r f; do
+            if file "$f" | grep -q "Mach-O"; then
+              echo "== $f"
+              vtool -show-build "$f" 2>/dev/null | grep -E "platform|minos"
+              if otool -l "$f" 2>/dev/null | grep -q "LC_DYLD_CHAINED_FIXUPS"; then
+                echo "  >>> ERROR: chained fixups (iOS 12 cannot load this binary)"
+              else
+                echo "  >>> classic fixups OK"
+              fi
+              # The UniformTypeIdentifiers system framework exists only on iOS 14+;
+              # it must be weak-linked (LC_LOAD_WEAK_DYLIB), never strong.
+              if otool -l "$f" 2>/dev/null | grep -A2 "LC_LOAD_DYLIB" | grep -q "Frameworks/UniformTypeIdentifiers.framework"; then
+                echo "  >>> ERROR: UniformTypeIdentifiers.framework is STRONGLY linked (iOS 12 dyld would reject it)"
+              fi
+              # A strong libswift overlay reference is only OK if the overlay is shipped inside the app.
+              if otool -l "$f" 2>/dev/null | grep -A2 "LC_LOAD_DYLIB" | grep -q "libswiftUniformTypeIdentifiers"; then
+                if [ -f "build/ios/iphoneos/Payload/Runner.app/Frameworks/libswiftUniformTypeIdentifiers.dylib" ]; then
+                  echo "  >>> libswift overlay strongly linked but embedded in app: OK"
+                else
+                  echo "  >>> ERROR: libswiftUniformTypeIdentifiers strongly linked and NOT embedded"
+                fi
+              fi
+            fi
+          done
+          echo "===== Weak linked dylibs (Runner) ====="
+          otool -l build/ios/iphoneos/Payload/Runner.app/Runner 2>/dev/null | grep -A2 "LC_LOAD_WEAK_DYLIB" | grep name || echo "  (none)"
+          echo "===== Embedded Swift runtime / overlays ====="
+          ls -1 build/ios/iphoneos/Payload/Runner.app/Frameworks/ 2>/dev/null | grep -i swift || echo "  (no libswift* embedded)"
+          echo "===== MinimumOSVersion in Info.plist ====="
+          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" build/ios/iphoneos/Payload/Runner.app/Info.plist 2>/dev/null || true
+
+      - name: Rename with version
+        run: |
+          APP_VERSION=$(grep "version:" pubspec.yaml | head -1 | cut -d':' -f2 | tr -d ' ' | cut -d'+' -f1)
+          mkdir -p result
+          mv build/ios/iphoneos/venera-ios.ipa result/venera-ios12-$APP_VERSION.ipa
+          ls -lh result/
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: venera-ios12-ipa
+          path: result/
+          retention-days: 30
