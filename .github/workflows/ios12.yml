@@ -68,6 +68,12 @@ jobs:
           sed -i '' -E "s/s\.platform = :ios, '1[0-9]+\.[0-9]+'/s.platform = :ios, '12.0'/" "$ZIP_SPEC"
           grep -n "s.platform" "$ZIP_SPEC"
 
+      - name: Replace zip_flutter std::filesystem with POSIX (iOS 12)
+        # miniz.h uses C++17 std::filesystem (path/status/file_size/
+        # last_write_time) whose libc++ symbols are unavailable before iOS 13.
+        # Swap the _stat() helper on Apple platforms for an lstat-based one.
+        run: python3 ios12_patches/patch_zip_flutter.py "$PUB_CACHE"
+
       - name: Build iOS (release, no code signing)
         run: flutter build ios --release --no-codesign
 
