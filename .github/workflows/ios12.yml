@@ -7,7 +7,10 @@ on:
 
 jobs:
   Build_IOS12:
-    runs-on: macos-15
+    # macos-15 now maps to the congested arm64 (M1) fleet whose jobs were
+    # cancelled at the 15-minute queue cap. The Intel fleet has far better
+    # availability and runs the same Xcode 16.x image; Flutter uses x64.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
