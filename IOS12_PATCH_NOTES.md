@@ -22,10 +22,18 @@
    - `directoryURL`（iOS 13+）加可用性守卫
 
 4. `.github/workflows/ios12.yml`（新增）
-   - 使用 Xcode 16.x + Flutter 3.32.6 + Rust（aarch64-apple-ios）
+   - 使用 Xcode 16.x + Flutter 3.32.6 + Rust（aarch64-apple-ios），runner 用
+     `macos-15-intel`（arm64 免费队列拥塞，排队 15 分钟会被自动取消）
    - 向 Cargo 写入 target-specific rustflags：
      `[target.aarch64-apple-ios] rustflags = ["-C", "deployment-target=12.0"]`
      把 rhttp（Rust 静态库）的最低系统版本从工具链默认的 13 压到 12
+   - `flutter pub get` 后在 pub cache 中把 zip_flutter 的 podspec 平台从 13.0 降到 12.0
+     （CocoaPods 解析器在 post_install 之前就会拒绝声明 13.0 的 pod）
+   - 运行 `ios12_patches/patch_zip_flutter.py`：把 zip_flutter 0.0.12 的
+     `src/miniz.h` 中基于 C++17 `std::filesystem`（path/status/file_size/
+     last_write_time，这些 libc++ 符号 iOS 13 才提供）的 `_stat()` 助手，
+     在 Apple 平台替换为等价的 POSIX `lstat()`（`<sys/stat.h>`）实现；
+     非 Apple 平台保持原样
    - `flutter build ios --release --no-codesign` 后手工打包成 IPA
    - 打包后自动校验每个二进制的 minos、fixup 格式和 Swift 运行时嵌入情况
 
